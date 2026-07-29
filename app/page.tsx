@@ -20,17 +20,19 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mounted, setMounted] = useState(false);
 
+  const userId = user?.id || user?.email || "";
+
   useEffect(() => {
-    if (!initialized) return;
+    if (!initialized || !user) return;
 
     if (typeof window !== "undefined" && window.innerWidth < 1024) {
       setSidebarOpen(false);
     }
 
-    const initial = getConversations();
+    const initial = getConversations(userId);
     if (initial.length === 0) {
       const fresh = createConversation();
-      saveConversations([fresh]);
+      saveConversations([fresh], userId);
       setConversations([fresh]);
       setActiveConversationId(fresh.id);
     } else {
@@ -39,12 +41,12 @@ export default function Home() {
       setActiveConversationId(sorted[0].id);
     }
     setMounted(true);
-  }, [initialized]);
+  }, [initialized, user, userId]);
 
   useEffect(() => {
-    if (!mounted) return;
-    saveConversations(conversations);
-  }, [conversations, mounted]);
+    if (!mounted || !user) return;
+    saveConversations(conversations, userId);
+  }, [conversations, mounted, user, userId]);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === activeConversationId),

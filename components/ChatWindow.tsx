@@ -641,13 +641,13 @@ export default function ChatWindow({
 
       <div
         ref={containerRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-chat relative z-10"
+        className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-chat relative z-10 overscroll-contain"
       >
         {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center min-h-full px-3 sm:px-4 py-8 sm:py-12">
+          <div className="flex flex-col items-center justify-center min-h-full px-4 py-4 sm:py-6 md:py-8">
             <div className="text-center max-w-4xl mx-auto flex flex-col items-center w-full">
               {/* Official Crystal Gem Logomark */}
-              <div className="relative mb-3 sm:mb-4">
+              <div className="relative mb-2 sm:mb-3">
                 {/* Purple glow aura behind gem */}
                 <div className="absolute inset-0 blur-3xl bg-purple-600/20 rounded-full scale-150" />
                 <Image
@@ -655,25 +655,25 @@ export default function ChatWindow({
                   alt="Obsidian Crystal"
                   width={504}
                   height={749}
-                  className="relative w-16 sm:w-24 md:w-28 h-auto object-contain drop-shadow-[0_0_25px_rgba(168,85,247,0.6)] animate-pulse-slow"
+                  className="relative w-14 sm:w-16 md:w-20 lg:w-24 h-auto object-contain drop-shadow-[0_0_25px_rgba(168,85,247,0.6)] animate-pulse-slow"
                   priority
                 />
               </div>
 
               {/* OBSIDIAN Title */}
-              <h1 className="text-3xl sm:text-6xl md:text-7xl font-extrabold tracking-[0.15em] sm:tracking-[0.25em] text-transparent bg-clip-text bg-gradient-to-b from-purple-100 via-purple-400 to-purple-800 drop-shadow-[0_0_35px_rgba(168,85,247,0.35)] uppercase font-mono mb-2">
+              <h1 className="text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-[0.15em] sm:tracking-[0.25em] text-transparent bg-clip-text bg-gradient-to-b from-purple-100 via-purple-400 to-purple-800 drop-shadow-[0_0_35px_rgba(168,85,247,0.35)] uppercase font-mono mb-1.5 sm:mb-2">
                 OBSIDIAN
               </h1>
 
               {/* Diamond Separator Line */}
-              <div className="flex items-center gap-3 my-3">
-                <div className="h-[1px] w-16 bg-gradient-to-r from-transparent to-purple-500/50" />
+              <div className="flex items-center gap-3 my-1.5 sm:my-2">
+                <div className="h-[1px] w-12 sm:w-16 bg-gradient-to-r from-transparent to-purple-500/50" />
                 <Diamond className="w-2.5 h-2.5 fill-purple-400 text-purple-400 shadow-[0_0_8px_#a855f7]" />
-                <div className="h-[1px] w-16 bg-gradient-to-l from-transparent to-purple-500/50" />
+                <div className="h-[1px] w-12 sm:w-16 bg-gradient-to-l from-transparent to-purple-500/50" />
               </div>
 
               {/* Subtitle */}
-              <p className="text-sm sm:text-base text-foreground-muted font-medium mb-12">
+              <p className="text-xs sm:text-sm md:text-base text-foreground-muted font-medium mb-4 sm:mb-6 md:mb-8 max-w-xs sm:max-w-none px-2">
                 {greeting.includes(firstName) ? (
                   <>
                     {greeting.split(firstName)[0]}
@@ -685,8 +685,8 @@ export default function ChatWindow({
                 )}
               </p>
 
-              {/* Dynamic 3 Cards Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 max-w-3xl w-full px-2">
+              {/* Desktop Prompt Cards (Hidden on mobile) */}
+              <div className="hidden sm:grid grid-cols-3 gap-3 sm:gap-4 md:gap-5 max-w-3xl w-full px-2">
                 {currentPrompts.map((item, idx) => {
                   const Icon = item.icon;
                   const isSelected = selectedCardIndex === idx;
@@ -697,19 +697,19 @@ export default function ChatWindow({
                         setSelectedCardIndex(idx);
                         handleSuggestionClick(item.text);
                       }}
-                      className={`group flex flex-col items-center text-center p-6 rounded-2xl border transition-all duration-300 backdrop-blur-md cursor-pointer ${
+                      className={`group flex flex-col items-center text-center p-3.5 sm:p-4 md:p-5 rounded-2xl border transition-all duration-300 backdrop-blur-md cursor-pointer ${
                         isSelected
                           ? "border-purple-500/80 bg-purple-950/25 shadow-[0_0_25px_rgba(168,85,247,0.2)] ring-1 ring-purple-500/50"
                           : "border-purple-950/40 bg-[#0c0b12]/80 hover:border-purple-500/50 hover:bg-purple-950/20 hover:shadow-[0_0_20px_rgba(168,85,247,0.15)]"
                       }`}
                     >
-                      <div className="w-12 h-12 rounded-2xl border border-purple-500/30 bg-purple-950/40 flex items-center justify-center mb-4 group-hover:border-purple-400/60 group-hover:bg-purple-900/40 group-hover:shadow-[0_0_15px_rgba(168,85,247,0.3)] transition-all">
-                        <Icon className="w-6 h-6 text-purple-400 group-hover:scale-110 transition-transform" />
+                      <div className="w-9 h-9 sm:w-10 sm:h-10 md:w-11 md:h-11 rounded-xl border border-purple-500/30 bg-purple-950/40 flex items-center justify-center mb-2.5 sm:mb-3 group-hover:border-purple-400/60 group-hover:bg-purple-900/40 group-hover:shadow-[0_0_15px_rgba(168,85,247,0.3)] transition-all">
+                        <Icon className="w-5 h-5 md:w-6 md:h-6 text-purple-400 group-hover:scale-110 transition-transform" />
                       </div>
-                      <h3 className="text-xs font-bold tracking-widest text-purple-300 mb-2 uppercase font-mono">
+                      <h3 className="text-[10px] sm:text-xs font-bold tracking-widest text-purple-300 mb-1.5 sm:mb-2 uppercase font-mono">
                         {item.category}
                       </h3>
-                      <p className="text-[12px] text-foreground-muted/90 leading-relaxed group-hover:text-foreground transition-colors">
+                      <p className="text-[11px] sm:text-[12px] text-foreground-muted/90 leading-relaxed group-hover:text-foreground transition-colors line-clamp-3">
                         {item.text}
                       </p>
                     </button>
@@ -719,7 +719,7 @@ export default function ChatWindow({
             </div>
           </div>
         ) : (
-          <div className="max-w-3xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+          <div className="max-w-3xl mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8">
             <div className="space-y-1">
               {messages.map((message, index) => {
                 const isLastAssistant =

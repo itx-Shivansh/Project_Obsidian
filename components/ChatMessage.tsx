@@ -124,22 +124,22 @@ function CodeBlock({
   const detectedLang = langMatch ? langMatch[1] : "";
 
   return (
-    <div className="relative my-5 rounded-xl border border-border overflow-hidden shadow-md bg-[#0e0e10] not-prose">
-      <div className="flex items-center justify-between px-3.5 py-2 border-b border-border bg-background-secondary/80">
+    <div className="relative my-4 sm:my-5 rounded-xl border border-border overflow-hidden shadow-md bg-[#0e0e10] not-prose max-w-full">
+      <div className="flex items-center justify-between px-3 sm:px-3.5 py-1.5 sm:py-2 border-b border-border bg-background-secondary/80">
         <div className="flex items-center gap-2">
-          <div className="flex gap-1.5 mr-2">
-            <div className="w-3 h-3 rounded-full bg-red-500/70" />
-            <div className="w-3 h-3 rounded-full bg-yellow-500/70" />
-            <div className="w-3 h-3 rounded-full bg-green-500/70" />
+          <div className="flex gap-1.5 mr-1.5 sm:mr-2">
+            <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-red-500/70" />
+            <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-yellow-500/70" />
+            <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-green-500/70" />
           </div>
-          <span className="text-xs font-medium font-mono text-foreground-muted tracking-wide uppercase">
+          <span className="text-[11px] sm:text-xs font-medium font-mono text-foreground-muted tracking-wide uppercase">
             {detectedLang || "code"}
           </span>
         </div>
         <CopyButton value={text} size="xs" label="Copy" />
       </div>
-      <pre className="overflow-x-auto scrollbar-chat">
-        <code className={`${className ?? ""} block p-4 text-[13.5px] leading-relaxed font-mono`}>
+      <pre className="overflow-x-auto scrollbar-chat max-w-full">
+        <code className={`${className ?? ""} block p-3 sm:p-4 text-[12.5px] sm:text-[13.5px] leading-relaxed font-mono`}>
           {children}
         </code>
       </pre>
@@ -213,17 +213,19 @@ export default function ChatMessage({
 
   return (
     <div
-      className={`group/message flex w-full mb-6 sm:mb-8 animate-fade-in ${
+      className={`group/message flex w-full mb-5 sm:mb-8 animate-fade-in ${
         isUser ? "justify-end" : "justify-start"
       }`}
     >
       <div
-        className={`max-w-[92%] sm:max-w-[85%] lg:max-w-[78%] ${
-          isUser ? "order-2" : "order-1"
+        className={`${
+          isUser
+            ? "max-w-[88%] sm:max-w-[80%] lg:max-w-[75%] order-2 ml-auto"
+            : "max-w-full sm:max-w-[85%] lg:max-w-[78%] order-1"
         } w-full`}
       >
         {!isUser && isFirstInSequence && (
-          <div className="flex items-center gap-2 mb-2.5 ml-1 h-5">
+          <div className="flex items-center gap-2 mb-2 ml-0.5 h-5">
             <div className="w-4 h-4 flex items-center justify-center">
               <Image
                 src="/obsidian-gem-small.png"
@@ -240,26 +242,26 @@ export default function ChatMessage({
         )}
 
         {isUser ? (
-          <div className="bg-[#14121f] border border-purple-900/30 rounded-2xl rounded-tr-sm px-4 sm:px-5 py-3 sm:py-3.5 shadow-sm ml-auto max-w-full">
+          <div className="bg-[#14121f] border border-purple-900/30 rounded-2xl rounded-tr-sm px-3.5 sm:px-5 py-2.5 sm:py-3.5 shadow-sm ml-auto max-w-full">
             <div
               data-message-content
-              className="text-foreground text-[15px] leading-relaxed whitespace-pre-wrap break-words"
+              className="text-foreground text-[14.5px] sm:text-[15px] leading-relaxed whitespace-pre-wrap break-words"
             >
               {message.content}
             </div>
           </div>
         ) : isError ? (
-          <div className="px-1 py-1 w-full">
+          <div className="px-0.5 sm:px-1 py-1 w-full">
             <div
               data-message-content
-              className="text-[15px] leading-relaxed whitespace-pre-wrap break-words text-red-400"
+              className="text-[14.5px] sm:text-[15px] leading-relaxed whitespace-pre-wrap break-words text-red-400"
             >
               {message.content || "Something went wrong."}
             </div>
             {retryHandler && (
               <button
                 onClick={retryHandler}
-                className="mt-3 inline-flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 transition-colors px-3 py-1.5 rounded-lg border border-red-500/30 hover:border-red-500/50 hover:bg-red-500/5 font-medium focus:outline-none focus:ring-2 focus:ring-red-500/50"
+                className="mt-3 inline-flex items-center gap-1.5 text-xs sm:text-sm text-red-400 hover:text-red-300 transition-colors px-3 py-1.5 rounded-lg border border-red-500/30 hover:border-red-500/50 hover:bg-red-500/5 font-medium focus:outline-none focus:ring-2 focus:ring-red-500/50"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 Retry
@@ -267,8 +269,8 @@ export default function ChatMessage({
             )}
           </div>
         ) : (
-          <div className="px-1 py-1 w-full">
-            <div data-message-content className="markdown-content text-foreground text-[15px] leading-relaxed break-words min-h-[24px]">
+          <div className="px-0.5 sm:px-1 py-1 w-full">
+            <div data-message-content className="markdown-content text-foreground text-[14.5px] sm:text-[15px] leading-relaxed break-words min-h-[24px]">
               <StreamingWrap
                 isThinking={!!isThinking}
                 isStreaming={!!message.isStreaming}
@@ -308,7 +310,7 @@ export default function ChatMessage({
             )}
 
             {showActions && (
-              <div className="flex items-center gap-2 mt-3 ml-0.5 opacity-100 sm:opacity-0 sm:group-hover/message:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
+              <div className="flex items-center gap-2 mt-2.5 sm:mt-3 ml-0.5 opacity-100 sm:opacity-0 sm:group-hover/message:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
                 {canRegenerate && onRegenerate && (
                   <button
                     onClick={onRegenerate}

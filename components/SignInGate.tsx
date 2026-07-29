@@ -2,7 +2,8 @@
 
 import { useCallback, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
-import { Loader2, ShieldCheck, Lock, AlertCircle } from "lucide-react";
+import Image from "next/image";
+import { Loader2, ShieldCheck, AlertCircle } from "lucide-react";
 
 function GoogleIcon({ className }: { className?: string }) {
   return (
@@ -55,12 +56,19 @@ export default function SignInGate() {
         <div className="absolute -bottom-40 -right-40 w-[520px] h-[520px] rounded-full bg-accent/10 blur-3xl animate-pulse" style={{ animationDelay: "600ms" }} />
       </div>
 
-      <div className="relative w-full max-w-md animate-fade-in">
-        <div className="bg-background-secondary/60 backdrop-blur-xl border border-border rounded-3xl shadow-2xl p-8 sm:p-10">
+      <div className="relative w-full max-w-md animate-fade-in my-auto py-4">
+        <div className="bg-background-secondary/60 backdrop-blur-xl border border-border rounded-3xl shadow-2xl p-6 sm:p-10">
           <div className="flex flex-col items-center text-center mb-8">
             <div className="relative mb-5">
-              <div className="w-16 h-16 rounded-2xl bg-accent/15 border border-accent/30 flex items-center justify-center">
-                <Lock className="w-7 h-7 text-accent" strokeWidth={1.8} />
+              <div className="w-16 h-16 rounded-2xl bg-purple-950/40 border border-purple-500/30 flex items-center justify-center shadow-[0_0_20px_rgba(168,85,247,0.25)]">
+                <Image
+                  src="/obsidian-gem.png"
+                  alt="Obsidian"
+                  width={504}
+                  height={749}
+                  className="w-8 h-12 object-contain filter drop-shadow-[0_0_10px_rgba(168,85,247,0.7)]"
+                  priority
+                />
               </div>
               <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-background-secondary border border-border flex items-center justify-center">
                 <ShieldCheck className="w-4 h-4 text-green-400" strokeWidth={2.2} />

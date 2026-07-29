@@ -206,7 +206,7 @@ export default function Sidebar({
                               );
                             }, 4000);
                           }}
-                          className="opacity-0 group-hover:opacity-100 p-1 rounded-md text-foreground-muted hover:text-red-400 hover:bg-red-500/10 transition-all flex-shrink-0 focus:outline-none"
+                          className="chat-delete-btn opacity-0 group-hover:opacity-100 p-1.5 rounded-md text-foreground-muted hover:text-red-400 hover:bg-red-500/10 transition-all flex-shrink-0 focus:outline-none"
                           aria-label="Delete conversation"
                           title="Delete conversation"
                         >

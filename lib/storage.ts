@@ -3,17 +3,35 @@
 import { v4 as uuidv4 } from "uuid";
 import type { Conversation } from "@/lib/types";
 
-const STORAGE_KEY = "obsidian-conversations";
+const BASE_STORAGE_KEY = "obsidian-conversations";
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
 }
 
-export function getConversations(): Conversation[] {
+function getStorageKey(userId?: string): string {
+  if (!userId) return BASE_STORAGE_KEY;
+  return `${BASE_STORAGE_KEY}-${userId}`;
+}
+
+export function getConversations(userId?: string): Conversation[] {
   if (!isBrowser()) return [];
 
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const key = getStorageKey(userId);
+    let raw = window.localStorage.getItem(key);
+    
+    // Migration: if user-scoped key has no data yet, check for legacy un-scoped data
+    if (!raw && userId) {
+      const legacyRaw = window.localStorage.getItem(BASE_STORAGE_KEY);
+      if (legacyRaw) {
+        raw = legacyRaw;
+        // Migrate to user-scoped key and remove un-scoped legacy key
+        window.localStorage.setItem(key, legacyRaw);
+        window.localStorage.removeItem(BASE_STORAGE_KEY);
+      }
+    }
+
     if (!raw) return [];
 
     const parsed = JSON.parse(raw) as unknown;
@@ -41,11 +59,12 @@ export function getConversations(): Conversation[] {
   }
 }
 
-export function saveConversations(conversations: Conversation[]): void {
+export function saveConversations(conversations: Conversation[], userId?: string): void {
   if (!isBrowser()) return;
 
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+    const key = getStorageKey(userId);
+    window.localStorage.setItem(key, JSON.stringify(conversations));
   } catch (err) {
     console.error("[Storage] Failed to save conversations:", err);
   }

@@ -20,10 +20,14 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* Prevent elastic bounce scrolling at page level */
+  overscroll-behavior: none;
 }
 
 * {
   box-sizing: border-box;
+  /* Better touch targets */
+  -webkit-tap-highlight-color: transparent;
 }
 
 ::selection {
@@ -50,6 +54,29 @@ body {
 }
 
 @layer utilities {
+  /* iOS safe area bottom padding for chat input */
+  .pb-safe {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  /* Hide scrollbar on mobile for cleaner look */
+  @media (max-width: 1024px) {
+    .scrollbar-chat::-webkit-scrollbar {
+      display: none;
+    }
+    .scrollbar-chat {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  }
+
+  /* On touch-only devices, always show delete buttons (no hover available) */
+  @media (hover: none) {
+    .chat-delete-btn {
+      opacity: 1 !important;
+    }
+  }
+
   .animate-fade-in {
     animation: fadeIn 0.3s ease-out forwards;
     opacity: 0;
