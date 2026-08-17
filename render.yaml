@@ -10,6 +10,10 @@ services:
         value: 20.11.0
       - key: GROQ_API_KEY
         sync: false
+      - key: GROQ_API_KEY_2
+        sync: false
+      - key: GROQ_API_KEYS
+        sync: false
       - key: NEXT_PUBLIC_SUPABASE_URL
         sync: false
       - key: NEXT_PUBLIC_SUPABASE_ANON_KEY

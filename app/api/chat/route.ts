@@ -221,39 +221,7 @@ async function* createResilientProviderStream(
   messages: { role: string; content: string }[],
   systemPrompt: string
 ): AsyncGenerator<string> {
-  // Layer 1: Groq Llama-3.3-70b-versatile (Primary high-tier model)
-  try {
-    const stream = await createGroqChatStream(messages, systemPrompt, "llama-3.3-70b-versatile");
-    let yieldedCount = 0;
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta && delta.length > 0) {
-        yieldedCount++;
-        yield delta;
-      }
-    }
-    if (yieldedCount > 0) return;
-  } catch (err) {
-    console.warn("[Stream Engine] Layer 1 (Groq 70B) limit hit, switching to Layer 2 (Groq 8B Instant)...", err);
-  }
-
-  // Layer 2: Groq Llama-3.1-8b-instant (500,000 TPM limit - 5x higher quota!)
-  try {
-    const stream = await createGroqChatStream(messages, systemPrompt, "llama-3.1-8b-instant");
-    let yieldedCount = 0;
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta && delta.length > 0) {
-        yieldedCount++;
-        yield delta;
-      }
-    }
-    if (yieldedCount > 0) return;
-  } catch (err) {
-    console.warn("[Stream Engine] Layer 2 (Groq 8B) limit hit, switching to Layer 3 (Gemini Multi-Key)...", err);
-  }
-
-  // Layer 3: Gemini 2.0 Flash (Iterates Key 1 -> Key 2 -> Key 3)
+  // Layer 1: Gemini 3.6 Flash (Primary model with Key 1 -> Key 2 -> Key 3 Failover)
   try {
     const stream = await createGeminiChatStream(messages, systemPrompt);
     let yieldedCount = 0;
@@ -265,12 +233,44 @@ async function* createResilientProviderStream(
     }
     if (yieldedCount > 0) return;
   } catch (err) {
-    console.warn("[Stream Engine] Layer 3 (Gemini Multi-Key) limit hit, switching to Layer 4 (Groq Mixtral)...", err);
+    console.warn("[Stream Engine] Layer 1 (Gemini Multi-Key) failed/limited, switching to Layer 2 (Groq Compound Fallback)...", err);
   }
 
-  // Layer 4: Groq Mixtral (mixtral-8x7b-32768)
+  // Layer 2: Groq Compound (groq/compound - fast high-accuracy fallback)
   try {
-    const stream = await createGroqChatStream(messages, systemPrompt, "mixtral-8x7b-32768");
+    const stream = await createGroqChatStream(messages, systemPrompt, "groq/compound");
+    let yieldedCount = 0;
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta && delta.length > 0) {
+        yieldedCount++;
+        yield delta;
+      }
+    }
+    if (yieldedCount > 0) return;
+  } catch (err) {
+    console.warn("[Stream Engine] Layer 2 (Groq Compound) limit hit, switching to Layer 3 (Groq GPT-OSS 120B)...", err);
+  }
+
+  // Layer 3: Groq GPT-OSS 120B (openai/gpt-oss-120b - secondary fallback)
+  try {
+    const stream = await createGroqChatStream(messages, systemPrompt, "openai/gpt-oss-120b");
+    let yieldedCount = 0;
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta && delta.length > 0) {
+        yieldedCount++;
+        yield delta;
+      }
+    }
+    if (yieldedCount > 0) return;
+  } catch (err) {
+    console.warn("[Stream Engine] Layer 3 (Groq GPT-OSS 120B) limit hit, switching to Layer 4 (Groq Compound Mini)...", err);
+  }
+
+  // Layer 4: Groq Compound Mini (groq/compound-mini - high throughput fallback)
+  try {
+    const stream = await createGroqChatStream(messages, systemPrompt, "groq/compound-mini");
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content;
       if (delta && delta.length > 0) {
@@ -279,7 +279,7 @@ async function* createResilientProviderStream(
     }
     return;
   } catch (err) {
-    console.error("[Stream Engine] All 4 provider layers exhausted:", err);
+    console.error("[Stream Engine] All provider layers exhausted:", err);
     throw new Error("Obsidian is temporarily overloaded. Please try again in a few seconds.");
   }
 }
