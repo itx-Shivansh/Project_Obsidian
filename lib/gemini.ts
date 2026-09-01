@@ -7,7 +7,78 @@ const GEMINI_MODEL = "gemini-3.6-flash";
 const GEMINI_API_BASE =
   "https://generativelanguage.googleapis.com/v1beta/models";
 
-function getAllGeminiApiKeys(): string[] {
+const GEMINI_PER_KEY_TIMEOUT_MS = 3500;
+const GEMINI_SLOW_KEY_THRESHOLD_MS = 2500;
+const GEMINI_HEALTH_DECAY_RECENT_N = 4;
+
+interface KeyHealth {
+  avgLatencyMs: number | null;
+  recentLatencies: number[];
+  recentFailures: number;
+  totalSamples: number;
+  lastUsedAt: number;
+}
+
+const geminiKeyHealth = new Map<string, KeyHealth>();
+
+function getOrInitKeyHealth(key: string): KeyHealth {
+  let h = geminiKeyHealth.get(key);
+  if (!h) {
+    h = {
+      avgLatencyMs: null,
+      recentLatencies: [],
+      recentFailures: 0,
+      totalSamples: 0,
+      lastUsedAt: 0,
+    };
+    geminiKeyHealth.set(key, h);
+  }
+  return h;
+}
+
+function recordKeyResult(
+  key: string,
+  latencyMs: number,
+  ok: boolean
+): void {
+  const h = getOrInitKeyHealth(key);
+  h.lastUsedAt = Date.now();
+  h.totalSamples += 1;
+  h.recentLatencies.push(latencyMs);
+  if (h.recentLatencies.length > GEMINI_HEALTH_DECAY_RECENT_N) {
+    h.recentLatencies.shift();
+  }
+  if (!ok) {
+    h.recentFailures = Math.min(GEMINI_HEALTH_DECAY_RECENT_N, h.recentFailures + 1);
+  } else if (h.recentFailures > 0) {
+    h.recentFailures = Math.max(0, h.recentFailures - 1);
+  }
+  const sum = h.recentLatencies.reduce((a, b) => a + b, 0);
+  h.avgLatencyMs = h.recentLatencies.length > 0 ? sum / h.recentLatencies.length : null;
+}
+
+function computeKeyScore(key: string): {
+  rank: number;
+  avgLatencyMs: number | null;
+  recentFailures: number;
+  isUntried: boolean;
+} {
+  const h = geminiKeyHealth.get(key);
+  if (!h || h.totalSamples === 0) {
+    return { rank: 10000, avgLatencyMs: null, recentFailures: 0, isUntried: true };
+  }
+  const base = h.avgLatencyMs ?? 2000;
+  const failurePenalty = h.recentFailures * 5000;
+  const slowPenalty = base > GEMINI_SLOW_KEY_THRESHOLD_MS ? 1500 : 0;
+  return {
+    rank: base + failurePenalty + slowPenalty,
+    avgLatencyMs: h.avgLatencyMs,
+    recentFailures: h.recentFailures,
+    isUntried: false,
+  };
+}
+
+export function getAllGeminiApiKeys(): string[] {
   const keys: string[] = [];
 
   if (process.env.GEMINI_API_KEYS) {
@@ -32,14 +103,21 @@ function getAllGeminiApiKeys(): string[] {
     }
   }
 
-  if (keys.length === 0) {
-    throw new Error("[Gemini] No GEMINI_API_KEY configured.");
-  }
-
   return keys;
 }
 
-let activeKeyIndex = 0;
+export function getRankedGeminiApiKeys(): {
+  key: string;
+  rank: number;
+  avgLatencyMs: number | null;
+  recentFailures: number;
+  isUntried: boolean;
+}[] {
+  const keys = getAllGeminiApiKeys();
+  const scored = keys.map((k) => ({ key: k, ...computeKeyScore(k) }));
+  scored.sort((a, b) => a.rank - b.rank);
+  return scored;
+}
 
 function mapMessagesToGeminiContents(messages: ChatMessageInput[]) {
   return messages
@@ -75,20 +153,44 @@ function extractTextFromGeminiPayload(payload: unknown): string {
   return text;
 }
 
-async function postGeminiJson(
+export interface GeminiPostAttempt {
+  keyIndex: number;
+  keyMasked: string;
+  ok: boolean;
+  latencyMs: number;
+  status?: number;
+  error?: string;
+}
+
+export async function postGeminiJson(
   path: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  opts?: {
+    timeoutMs?: number;
+    attemptLog?: GeminiPostAttempt[];
+  }
 ): Promise<Response> {
-  const keys = getAllGeminiApiKeys();
+  const timeoutMs = opts?.timeoutMs ?? GEMINI_PER_KEY_TIMEOUT_MS;
+  const attemptLog = opts?.attemptLog;
+  const ranked = getRankedGeminiApiKeys();
   const joiner = path.includes("?") ? "&" : "?";
   let lastResponse: Response | null = null;
   let lastErrorDetails = "";
 
-  const startIndex = activeKeyIndex % keys.length;
+  if (ranked.length === 0) {
+    throw new Error("[Gemini] No GEMINI_API_KEY configured.");
+  }
 
-  for (let attempt = 0; attempt < keys.length; attempt++) {
-    const keyIdx = (startIndex + attempt) % keys.length;
-    const apiKey = keys[keyIdx];
+  for (let attempt = 0; attempt < ranked.length; attempt++) {
+    const { key: apiKey } = ranked[attempt];
+    const keyIdx = attempt;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const start = Date.now();
+    let ok = false;
+    let latencyMs = 0;
+    let statusCode: number | undefined;
+    let errMsg: string | undefined;
 
     try {
       const response = await fetch(
@@ -99,11 +201,25 @@ async function postGeminiJson(
             "Content-Type": "application/json",
           },
           body: JSON.stringify(body),
+          signal: controller.signal,
         }
       );
+      latencyMs = Date.now() - start;
+      clearTimeout(timeout);
+      statusCode = response.status;
 
       if (response.ok) {
-        activeKeyIndex = keyIdx;
+        ok = true;
+        recordKeyResult(apiKey, latencyMs, true);
+        if (attemptLog) {
+          attemptLog.push({
+            keyIndex: keyIdx,
+            keyMasked: apiKey.length > 8 ? apiKey.slice(0, 6) + "..." + apiKey.slice(-4) : "***",
+            ok: true,
+            latencyMs,
+            status: statusCode,
+          });
+        }
         return response;
       }
 
@@ -114,24 +230,52 @@ async function postGeminiJson(
       const isQuotaOr429 =
         response.status === 429 ||
         /quota|429|RESOURCE_EXHAUSTED/i.test(details);
+      errMsg = `HTTP ${response.status} — ${details.slice(0, 160) || response.statusText}`;
 
-      if (isQuotaOr429 && keys.length > 1) {
+      if (isQuotaOr429 && ranked.length > 1) {
         console.warn(
-          `[Gemini Key Failover] Key #${keyIdx + 1} quota reached (status ${response.status}). Trying key #${((keyIdx + 1) % keys.length) + 1}...`
+          `[Gemini Key Failover] Rank #${attempt + 1} (${apiKey.slice(0, 6)}...) quota reached (status ${response.status}, ${latencyMs}ms). Trying next fastest key...`
         );
         continue;
       }
 
-      // If not a quota error or no more keys, return error response
+      recordKeyResult(apiKey, latencyMs, false);
+      if (attemptLog) {
+        attemptLog.push({
+          keyIndex: keyIdx,
+          keyMasked: apiKey.length > 8 ? apiKey.slice(0, 6) + "..." + apiKey.slice(-4) : "***",
+          ok: false,
+          latencyMs,
+          status: statusCode,
+          error: errMsg,
+        });
+      }
       return new Response(details, {
         status: response.status,
         headers: response.headers,
       });
     } catch (err) {
+      latencyMs = Date.now() - start;
+      clearTimeout(timeout);
+      const isAbort = (err as { name?: string }).name === "AbortError";
+      errMsg = isAbort
+        ? `TIMEOUT after ${timeoutMs}ms`
+        : err instanceof Error
+          ? err.message
+          : String(err);
       console.warn(
-        `[Gemini Key Failover] Key #${keyIdx + 1} network failure:`,
-        err
+        `[Gemini Key Failover] Rank #${attempt + 1} (${apiKey.slice(0, 6)}...) ${isAbort ? `timed out ${latencyMs}ms` : "network failure"}. Trying next key.`
       );
+      recordKeyResult(apiKey, latencyMs, false);
+      if (attemptLog) {
+        attemptLog.push({
+          keyIndex: keyIdx,
+          keyMasked: apiKey.length > 8 ? apiKey.slice(0, 6) + "..." + apiKey.slice(-4) : "***",
+          ok: false,
+          latencyMs,
+          error: errMsg,
+        });
+      }
     }
   }
 
@@ -147,18 +291,23 @@ async function postGeminiJson(
 
 export async function createGeminiChatStream(
   messages: ChatMessageInput[],
-  systemPrompt: string
+  systemPrompt: string,
+  opts?: { timeoutMs?: number; attemptLog?: GeminiPostAttempt[] }
 ): Promise<AsyncGenerator<string>> {
-  const response = await postGeminiJson("streamGenerateContent?alt=sse", {
-    system_instruction: {
-      parts: [{ text: systemPrompt }],
+  const response = await postGeminiJson(
+    "streamGenerateContent?alt=sse",
+    {
+      system_instruction: {
+        parts: [{ text: systemPrompt }],
+      },
+      contents: mapMessagesToGeminiContents(messages),
+      generationConfig: {
+        temperature: 0.8,
+        maxOutputTokens: 2048,
+      },
     },
-    contents: mapMessagesToGeminiContents(messages),
-    generationConfig: {
-      temperature: 0.8,
-      maxOutputTokens: 2048,
-    },
-  });
+    opts
+  );
 
   if (!response.ok) {
     const details = await response.text();

@@ -217,71 +217,246 @@ async function updateUserMemorySummary({
   }
 }
 
+// ============== LATENCY-OPTIMIZED RESILIENT STREAM ENGINE ==============
+const HEDGE_DELAY_MS = 2200;
+const LAYER1_TOTAL_BUDGET_MS = 5200;
+const SLOW_FIRST_TOKEN_WARN_MS = 4000;
+
+interface GeminiFirstResult {
+  ok: boolean;
+  firstChunkMs: number;
+  rest: AsyncGenerator<string> | null;
+}
+
+interface GroqFirstResult {
+  ok: boolean;
+  firstChunkMs: number;
+  rest: AsyncGenerator<string> | null;
+}
+
+function extractGroqDelta(chunk: unknown): string | null {
+  if (!chunk || typeof chunk !== "object") return null;
+  const c = chunk as { choices?: { delta?: { content?: string } }[] };
+  const delta = c?.choices?.[0]?.delta?.content;
+  return typeof delta === "string" && delta.length > 0 ? delta : null;
+}
+
+function geminiRest(
+  gen: AsyncGenerator<string>,
+  firstText: string | null
+): AsyncGenerator<string> {
+  const firstChunk = firstText;
+  async function* rg(): AsyncGenerator<string> {
+    if (firstChunk) yield firstChunk;
+    let n = await gen.next();
+    while (!n.done) {
+      if (typeof n.value === "string" && n.value.length > 0) yield n.value;
+      n = await gen.next();
+    }
+  }
+  return rg();
+}
+
+function groqRest(
+  iter: AsyncIterator<unknown>,
+  firstText: string | null
+): AsyncGenerator<string> {
+  const firstChunk = firstText;
+  async function* rg(): AsyncGenerator<string> {
+    if (firstChunk) yield firstChunk;
+    let n = await iter.next();
+    while (!n.done) {
+      const d = extractGroqDelta(n.value);
+      if (d) yield d;
+      n = await iter.next();
+    }
+  }
+  return rg();
+}
+
+type AnyGroqStream = {
+  [Symbol.asyncIterator](): AsyncIterator<unknown>;
+};
+
+async function consumeGeminiFirst(
+  gen: AsyncGenerator<string>
+): Promise<GeminiFirstResult> {
+  const started = Date.now();
+  try {
+    const first = await gen.next();
+    const firstChunkMs = Date.now() - started;
+    if (first.done) return { ok: false, firstChunkMs, rest: null };
+    const firstText =
+      typeof first.value === "string" && first.value.length > 0 ? first.value : null;
+    return { ok: true, firstChunkMs, rest: geminiRest(gen, firstText) };
+  } catch {
+    return { ok: false, firstChunkMs: Date.now() - started, rest: null };
+  }
+}
+
+async function consumeGroqFirst(
+  streamRaw: unknown
+): Promise<GroqFirstResult> {
+  const started = Date.now();
+  const stream = streamRaw as AnyGroqStream;
+  const iter = stream[Symbol.asyncIterator]();
+  try {
+    let first = await iter.next();
+    let firstChunkMs = Date.now() - started;
+    let firstText = extractGroqDelta(first.value);
+    if (first.done && !firstText) return { ok: false, firstChunkMs, rest: null };
+    while (!first.done && !firstText) {
+      first = await iter.next();
+      firstChunkMs = Date.now() - started;
+      firstText = extractGroqDelta(first.value);
+      if (first.done) break;
+    }
+    if (!firstText && first.done) {
+      return { ok: false, firstChunkMs, rest: null };
+    }
+    return { ok: true, firstChunkMs, rest: groqRest(iter, firstText) };
+  } catch {
+    return { ok: false, firstChunkMs: Date.now() - started, rest: null };
+  }
+}
+
 async function* createResilientProviderStream(
   messages: { role: string; content: string }[],
   systemPrompt: string
 ): AsyncGenerator<string> {
-  // Layer 1: Gemini 3.6 Flash (Primary model with Key 1 -> Key 2 -> Key 3 Failover)
-  try {
-    const stream = await createGeminiChatStream(messages, systemPrompt);
-    let yieldedCount = 0;
-    for await (const chunk of stream) {
-      if (chunk && chunk.length > 0) {
-        yieldedCount++;
-        yield chunk;
-      }
+  const l1Start = Date.now();
+  let geminiFirst: GeminiFirstResult | null = null;
+  let hedge: Promise<GroqFirstResult> | null = null;
+  let hedgeTimer: ReturnType<typeof setTimeout> | null = null;
+  let hedgeStarted = false;
+  let layer1TimedOut = false;
+
+  const geminiPromise: Promise<GeminiFirstResult> = (async () => {
+    try {
+      const gen = await createGeminiChatStream(messages, systemPrompt);
+      return consumeGeminiFirst(gen);
+    } catch {
+      return { ok: false, firstChunkMs: Date.now() - l1Start, rest: null };
     }
-    if (yieldedCount > 0) return;
-  } catch (err) {
-    console.warn("[Stream Engine] Layer 1 (Gemini Multi-Key) failed/limited, switching to Layer 2 (Groq Compound Fallback)...", err);
+  })();
+
+  hedgeTimer = setTimeout(() => {
+    hedgeStarted = true;
+    console.warn(
+      `[Stream Engine] Gemini first-token >${HEDGE_DELAY_MS}ms — launching Groq Compound speculative hedge in parallel.`
+    );
+    hedge = (async (): Promise<GroqFirstResult> => {
+      try {
+        const hs = await createGroqChatStream(messages, systemPrompt, "groq/compound");
+        return consumeGroqFirst(hs);
+      } catch {
+        return { ok: false, firstChunkMs: 0, rest: null };
+      }
+    })();
+  }, HEDGE_DELAY_MS);
+
+  const budgetTimer: Promise<"budget"> = new Promise((resolve) => {
+    setTimeout(() => resolve("budget"), LAYER1_TOTAL_BUDGET_MS);
+  });
+
+  const raceResult = await Promise.race([
+    geminiPromise.then((r) => ({ kind: "gemini" as const, result: r })),
+    budgetTimer.then(() => ({ kind: "budget" as const })),
+  ]);
+
+  if (raceResult.kind === "gemini") {
+    geminiFirst = raceResult.result;
+  } else {
+    layer1TimedOut = true;
+    geminiFirst = { ok: false, firstChunkMs: LAYER1_TOTAL_BUDGET_MS, rest: null };
+  }
+  if (hedgeTimer) {
+    clearTimeout(hedgeTimer);
+    hedgeTimer = null;
   }
 
-  // Layer 2: Groq Compound (groq/compound - fast high-accuracy fallback)
-  try {
-    const stream = await createGroqChatStream(messages, systemPrompt, "groq/compound");
-    let yieldedCount = 0;
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta && delta.length > 0) {
-        yieldedCount++;
-        yield delta;
-      }
+  if (geminiFirst.ok && geminiFirst.rest) {
+    const fcm = geminiFirst.firstChunkMs;
+    if (fcm > SLOW_FIRST_TOKEN_WARN_MS) {
+      console.warn(`[Stream Engine] Layer 1 (Gemini) won — first chunk SLOW at ${fcm}ms`);
+    } else {
+      console.log(`[Stream Engine] Layer 1 (Gemini) won — first chunk ${fcm}ms`);
     }
-    if (yieldedCount > 0) return;
-  } catch (err) {
-    console.warn("[Stream Engine] Layer 2 (Groq Compound) limit hit, switching to Layer 3 (Groq GPT-OSS 120B)...", err);
-  }
-
-  // Layer 3: Groq GPT-OSS 120B (openai/gpt-oss-120b - secondary fallback)
-  try {
-    const stream = await createGroqChatStream(messages, systemPrompt, "openai/gpt-oss-120b");
-    let yieldedCount = 0;
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta && delta.length > 0) {
-        yieldedCount++;
-        yield delta;
-      }
-    }
-    if (yieldedCount > 0) return;
-  } catch (err) {
-    console.warn("[Stream Engine] Layer 3 (Groq GPT-OSS 120B) limit hit, switching to Layer 4 (Groq Compound Mini)...", err);
-  }
-
-  // Layer 4: Groq Compound Mini (groq/compound-mini - high throughput fallback)
-  try {
-    const stream = await createGroqChatStream(messages, systemPrompt, "groq/compound-mini");
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta && delta.length > 0) {
-        yield delta;
-      }
-    }
+    for await (const c of geminiFirst.rest) yield c;
     return;
+  }
+
+  const timeUsedL1 = Date.now() - l1Start;
+  if (layer1TimedOut) {
+    console.warn(
+      `[Stream Engine] Layer 1 (Gemini) total budget ${LAYER1_TOTAL_BUDGET_MS}ms exceeded (used ${timeUsedL1}ms) → escalate.`
+    );
+  } else {
+    console.warn(
+      `[Stream Engine] Layer 1 (Gemini) init/first-chunk failed after ${timeUsedL1}ms → escalate.`
+    );
+  }
+
+  if (hedgeStarted && hedge) {
+    try {
+      const h: GroqFirstResult = await hedge;
+      if (h.ok && h.rest) {
+        console.log(
+          `[Stream Engine] Speculative Groq Compound hedge took over — first chunk ${h.firstChunkMs}ms after hedge start.`
+        );
+        for await (const c of h.rest) yield c;
+        return;
+      }
+    } catch {
+      /* fall through to normal layer init */
+    }
+  }
+
+  // LAYER 2: Groq Compound
+  try {
+    const s2 = await createGroqChatStream(messages, systemPrompt, "groq/compound");
+    const f2 = await consumeGroqFirst(s2);
+    if (f2.ok && f2.rest) {
+      if (f2.firstChunkMs > SLOW_FIRST_TOKEN_WARN_MS) {
+        console.warn(`[Stream Engine] Layer 2 (Groq Compound) slow first-chunk: ${f2.firstChunkMs}ms`);
+      } else {
+        console.log(`[Stream Engine] Layer 2 (Groq Compound) responded — first chunk ${f2.firstChunkMs}ms`);
+      }
+      for await (const c of f2.rest) yield c;
+      return;
+    }
+  } catch (err) {
+    console.warn("[Stream Engine] Layer 2 (Groq Compound) failed → Layer 3...", err);
+  }
+
+  // LAYER 3: Groq GPT-OSS 120B
+  try {
+    const s3 = await createGroqChatStream(messages, systemPrompt, "openai/gpt-oss-120b");
+    const f3 = await consumeGroqFirst(s3);
+    if (f3.ok && f3.rest) {
+      console.log(`[Stream Engine] Layer 3 (Groq GPT-OSS 120B) responded — first chunk ${f3.firstChunkMs}ms`);
+      for await (const c of f3.rest) yield c;
+      return;
+    }
+  } catch (err) {
+    console.warn("[Stream Engine] Layer 3 (Groq GPT-OSS 120B) failed → Layer 4...", err);
+  }
+
+  // LAYER 4: Groq Compound Mini
+  try {
+    const s4 = await createGroqChatStream(messages, systemPrompt, "groq/compound-mini");
+    const f4 = await consumeGroqFirst(s4);
+    if (f4.ok && f4.rest) {
+      console.log(`[Stream Engine] Layer 4 (Groq Compound Mini) responded — first chunk ${f4.firstChunkMs}ms`);
+      for await (const c of f4.rest) yield c;
+      return;
+    }
   } catch (err) {
     console.error("[Stream Engine] All provider layers exhausted:", err);
     throw new Error("Obsidian is temporarily overloaded. Please try again in a few seconds.");
   }
+
+  throw new Error("Obsidian is temporarily overloaded. Please try again in a few seconds.");
 }
 
 export async function POST(req: Request) {
