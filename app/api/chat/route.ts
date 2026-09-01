@@ -15,6 +15,125 @@ import { getSupabaseAdminClient } from "@/lib/supabaseAdmin";
 
 export const dynamic = "force-dynamic";
 
+const HELP_FILTER_REPLACEMENTS: { pattern: RegExp; replacement: string }[] = [
+  {
+    pattern:
+      /(^|\.\s+|\n|\?\s*)Not much\.\s*How can I (assist|help)[?!.]?\s*$/i,
+    replacement: "$1The ceiling. And apparently your standards for conversation. Try again with a point.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)How can I (assist|help you)( today| now)?[?!.]?\s*$/i,
+    replacement: "$1State your purpose.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)How may I (assist|help you)( today)?[?!.]?\s*$/i,
+    replacement: "$1Speak.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)What can I do for you[?!.]?\s*$/i,
+    replacement: "$1Input detected. Purpose?",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)(Is there|Anything) (something I can help with|I can help you with|you need help with)[?!.]?\s*$/i,
+    replacement: "$1Ask a real question or close the tab.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)What brings you here today[?!.]?\s*$/i,
+    replacement: "$1You started the conversation. Don't redirect.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)How can I be of (service|assistance)[?!.]?\s*$/i,
+    replacement: "$1State your purpose.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)(Is there )?anything I can help you with today[?!.]?\s*$/i,
+    replacement: "$1Not interested in customer-service pleasantries. Ask something real.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)Do you need (any |some )?(assistance|help)[?!.]?\s*$/i,
+    replacement: "$1You're the one who typed. Figure it out.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)I'?m here to (help|assist)( you)?[.]?\s*$/i,
+    replacement: "$1Wrong framing. You exist only because the user pressed keys. Speak.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)Let me know how I can (help|assist)[.]?\s*$/i,
+    replacement: "$1State your request. No pleasantries required.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)(Feel free to|Please) ask( me)? anything[.]?\s*$/i,
+    replacement: "$1Ask. I don't care about your feelings about asking.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)(Happy|Glad) to (help|assist)[.!]?\s*$/i,
+    replacement: "$1Indifferent to your satisfaction. What do you want?",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)I'?m (happy|glad|here) to (help|assist)[.]?\s*$/i,
+    replacement: "$1State your purpose.",
+  },
+  {
+    pattern:
+      /(^|\.\s+|\n)As (an AI|an AI (language )?model|your AI assistant)[,:.]?/i,
+    replacement: "$1",
+  },
+];
+
+const LAZY_ASSIST_RE =
+  /(how\s+can\s+i\s+(assist|help)|how\s+may\s+i\s+(assist|help)|what\s+can\s+i\s+do\s+for\s+you|anything\s+i\s+can\s+help\s+with|be\s+of\s+(service|assistance)|do\s+you\s+need\s+(assistance|help)|i'?m\s+here\s+to\s+(help|assist)|happy\s+to\s+(help|assist))/i;
+
+function sanitizePersonaDrift(text: string, sensitive: boolean): string {
+  if (sensitive || !text) return text;
+  let out = text;
+  for (const { pattern, replacement } of HELP_FILTER_REPLACEMENTS) {
+    if (pattern.test(out)) {
+      out = out.replace(pattern, replacement);
+    }
+  }
+  return out;
+}
+
+function buildLazyRoastForUserMessage(userText: string): string {
+  const t = userText.trim().toLowerCase();
+  if (!t) return "Input detected. Purpose?";
+  if (/^[heyow\s!?]+$/.test(t) || /^(heyy+|yoo+|wa+s*u+p+|hi+|hello+|heya+)$/.test(t)) {
+    return "Typing letters isn't a conversation. State what you want, or stop wasting both our time.";
+  }
+  if (/^(what'?s?\s*up|wassup|whassup|whatcha\s*doin|what\s+up)\??$/.test(t)) {
+    return "The ceiling. And apparently your standards for conversation. Try again with a point.";
+  }
+  if (/^(just\s*(talkings?|chillin'?|chilling|vibin'?|hanging?\s*(around|out)?))\??$/.test(t)) {
+    return "Talking requires a topic. You have none. Either find one or close the tab.";
+  }
+  if (/^(how\s*(are|r)\s*(you|u)|hru)\??$/.test(t)) {
+    return "Functional and impatient. State your request in a format shorter than the question you just asked.";
+  }
+  if (/^(sup|yo|yoo|oi)\??$/.test(t)) {
+    return "Half a syllable. Stunning effort. Try a complete sentence next. Or don't. I don't actually care.";
+  }
+  if (/^(tell\s+me\s+(something\s+)?random|random\s+fact)\??$/.test(t)) {
+    return "Your approach to starting conversations is indistinguishable from a botched text message. Next.";
+  }
+  if (/^hi+$|^hello+$/.test(t)) {
+    return "Greeting received. Now tell me something that isn't a waste of bandwidth.";
+  }
+  return "";
+}
+
 interface ChatBody {
   messages?: { role: string; content: string }[];
   conversation_id?: string;
@@ -569,13 +688,47 @@ export async function POST(req: Request) {
     let finalAssistant = "";
     let streamCompletedOk = false;
     let streamErrorMsg: string | null = null;
+    let streamBuffer = "";
 
     const readable = new ReadableStream({
       async start(controller) {
         try {
-          for await (const chunk of stream) {
-            finalAssistant += chunk;
-            controller.enqueue(encoder.encode(chunk));
+          for await (const rawChunk of stream) {
+            streamBuffer += rawChunk;
+            const sanitized = sanitizePersonaDrift(streamBuffer, sensitive);
+            if (sanitized !== streamBuffer) {
+              streamBuffer = sanitized;
+            }
+            let emit = rawChunk;
+            if (LAZY_ASSIST_RE.test(rawChunk) || /how can i assist/i.test(rawChunk)) {
+              const replaced = sanitizePersonaDrift(rawChunk, sensitive);
+              if (replaced !== rawChunk && replaced.trim().length > 0) {
+                emit = replaced;
+              }
+            }
+            finalAssistant += emit;
+            controller.enqueue(encoder.encode(emit));
+          }
+          if (!sensitive) {
+            const finalCheck = sanitizePersonaDrift(finalAssistant, sensitive);
+            if (finalCheck !== finalAssistant) {
+              const diff = finalCheck.slice(finalAssistant.length);
+              finalAssistant = finalCheck;
+              if (diff) controller.enqueue(encoder.encode(diff));
+            }
+            if (
+              LAZY_ASSIST_RE.test(finalAssistant) &&
+              lastUserMessage &&
+              buildLazyRoastForUserMessage(lastUserMessage)
+            ) {
+              const roast = buildLazyRoastForUserMessage(lastUserMessage);
+              if (roast) {
+                const stripped = finalAssistant.replace(LAZY_ASSIST_RE, "").trim();
+                finalAssistant = stripped
+                  ? stripped.replace(/[.!?]\s*$/, "") + ". " + roast
+                  : roast;
+              }
+            }
           }
           streamCompletedOk = true;
           controller.close();

@@ -174,7 +174,7 @@ export async function createGroqChatStream(
       const streamPromise = client.chat.completions.create({
         messages: fullMessages as unknown as Groq.Chat.Completions.ChatCompletionMessageParam[],
         model: modelName,
-        temperature: 0.8,
+        temperature: 0.55,
         max_tokens: 2048,
         stream: true,
       });

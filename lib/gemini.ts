@@ -302,7 +302,7 @@ export async function createGeminiChatStream(
       },
       contents: mapMessagesToGeminiContents(messages),
       generationConfig: {
-        temperature: 0.8,
+        temperature: 0.55,
         maxOutputTokens: 2048,
       },
     },
